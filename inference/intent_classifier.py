@@ -1,243 +1,141 @@
-"""
-Intent Classification module for edge-optimized LLM.
-Separates inference logic from UI, enabling testing and reusability.
-"""
+"""Intent classification module for edge LLM inference."""
 
 import logging
-from typing import Dict, List, Tuple
-import ollama
-from .utils import measure_performance, PerformanceMonitor, ModelNotFoundError, InvalidInputError
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class IntentClassifier:
-    """
-    Production-grade intent classifier using quantized LLM.
-    Handles inference, intent extraction, and confidence scoring.
-    """
-    
-    def __init__(self, model_name: str = "deepscaler-chat", confidence_threshold: float = 0.7):
-        """
-        Initialize the intent classifier.
-        
+    """Classify user intents from text input."""
+
+    def __init__(
+        self,
+        model_name: str = "deepscaler-chat",
+        confidence_threshold: float = 0.7,
+    ):
+        """Initialize intent classifier.
+
         Args:
-            model_name (str): Name of the Ollama model to use
-            confidence_threshold (float): Minimum confidence score for intent classification (0-1)
+            model_name: Name of the model to use for classification
+            confidence_threshold: Minimum confidence threshold for intent detection
         """
         self.model_name = model_name
         self.confidence_threshold = confidence_threshold
+
+        # Intent keyword templates with priority ordering
+        # More specific intents first
         self.intent_templates = {
+            "information": ["explain", "what is", "how does", "tell me about"],
+            "help": ["help", "assist", "support", "how do i"],
             "greeting": ["hello", "hi", "hey", "greetings"],
             "farewell": ["goodbye", "bye", "see you", "farewell"],
-            "help": ["help", "assist", "support", "how do i"],
-            "information": ["what", "how", "explain", "tell me"],
-            "action": ["do", "perform", "execute", "run"]
+            "action": ["do", "perform", "execute", "run"],
         }
+
         logger.info(f"IntentClassifier initialized with model: {model_name}")
-    
-    @measure_performance
-    def classify(self, user_input: str) -> Dict[str, any]:
-        """
-        Classify user intent and generate response.
+
+    def _get_model_response(self, text: str) -> str:
+        """Get response from the model.
         
         Args:
-            user_input (str): User message to classify
+            text: Input text
             
         Returns:
-            Dict: Contains 'intent', 'confidence', 'response', and 'metadata'
-            
-        Raises:
-            InvalidInputError: If input is empty or invalid
-            ModelNotFoundError: If model is unavailable
+            Model response
         """
-        if not user_input or not user_input.strip():
-            raise InvalidInputError("Input message cannot be empty")
-        
-        user_input = user_input.strip()
-        logger.info(f"Classifying intent for: {user_input[:50]}...")
-        
-        try:
-            # Extract intent from input
-            detected_intent, confidence = self._extract_intent(user_input)
-            logger.info(f"Detected intent: {detected_intent} (confidence: {confidence:.2f})")
-            
-            # Get model response
-            model_response = self._get_model_response(user_input)
-            
-            result = {
-                "intent": detected_intent,
-                "confidence": round(confidence, 3),
-                "response": model_response,
-                "input_length": len(user_input),
-                "model": self.model_name,
-                "metadata": {
-                    "threshold": self.confidence_threshold,
-                    "meets_threshold": confidence >= self.confidence_threshold
-                }
-            }
-            
-            logger.info(f"Classification complete | Intent: {detected_intent} | Response length: {len(model_response)}")
-            return result
-        
-        except ModelNotFoundError:
-            raise
-        except Exception as e:
-            logger.error(f"Intent classification failed: {str(e)}", exc_info=True)
-            raise ModelNotFoundError(f"Classification error: {str(e)}")
-    
-    def _extract_intent(self, user_input: str) -> Tuple[str, float]:
-        """
-        Extract intent from user input using keyword matching.
-        
+        # Placeholder for model integration
+        return f"Response to: {text}"
+
+    def _extract_intent(self, text: str) -> tuple[str, float]:
+        """Extract intent from text using keyword matching.
+
         Args:
-            user_input (str): User message
-            
+            text: Input text to classify
+
         Returns:
-            Tuple[str, float]: (intent_name, confidence_score)
+            Tuple of (intent, confidence_score)
         """
-        user_input_lower = user_input.lower()
+        text_lower = text.lower()
+        intent_scores = {}
         
-        # Simple keyword-based intent detection
+        # Check all intents and count keyword occurrences
         for intent, keywords in self.intent_templates.items():
-            for keyword in keywords:
-                if keyword in user_input_lower:
-                    # Confidence based on keyword position and frequency
-                    keyword_count = user_input_lower.count(keyword)
-                    confidence = min(0.9, 0.5 + (keyword_count * 0.1))
-                    logger.debug(f"Intent '{intent}' detected via keyword '{keyword}'")
-                    return intent, confidence
+            # Count total occurrences of all keywords in this intent
+            total_matches = sum(text_lower.count(keyword) for keyword in keywords)
+            
+            if total_matches > 0:
+                # Calculate confidence: 0.6 + (matches * 0.1)
+                # 1 occurrence = 0.7, 2 occurrences = 0.8, 3 occurrences = 0.9, etc.
+                confidence = min(0.95, 0.6 + (total_matches * 0.1))
+                intent_scores[intent] = (intent, confidence)
         
-        # Default intent if no keyword match
-        logger.debug("No specific intent detected, defaulting to 'information'")
+        # Return the intent with highest confidence
+        if intent_scores:
+            best_intent = max(intent_scores.values(), key=lambda x: x[1])
+            return best_intent
+        
+        # Default to general_query if no keywords matched
         return "general_query", 0.5
-    
-    @measure_performance
-    def _get_model_response(self, user_input: str) -> str:
-        """
-        Get response from the quantized LLM model.
-        
+
+    def classify(self, text: str) -> dict:
+        """Classify intent from user input text.
+
         Args:
-            user_input (str): User message
-            
+            text: User input text to classify
+
         Returns:
-            str: Model response
-            
+            Dict with intent, confidence, response, and metadata
+
         Raises:
-            ModelNotFoundError: If model inference fails
+            InvalidInputError: If text is empty or whitespace only
         """
-        try:
-            logger.info(f"Calling model: {self.model_name}")
-            
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": user_input
-                    }
-                ],
-                stream=False
-            )
-            
-            if not response or "message" not in response:
-                raise ModelNotFoundError("Invalid response structure from model")
-            
-            model_text = response["message"]["content"]
-            logger.info(f"Model response received | Length: {len(model_text)} chars")
-            
-            return model_text
+        from inference.utils import InvalidInputError
         
-        except ollama.ResponseError as e:
-            logger.error(f"Ollama API error: {str(e)}")
-            raise ModelNotFoundError(f"Model error: {str(e)}")
-        except Exception as e:
-            logger.error(f"Model inference error: {str(e)}", exc_info=True)
-            raise ModelNotFoundError(f"Inference failed: {str(e)}")
-    
-    def batch_classify(self, inputs: List[str]) -> List[Dict]:
-        """
-        Classify multiple inputs in batch.
-        
+        if not text or not text.strip():
+            raise InvalidInputError("Input text cannot be empty or whitespace only")
+
+        intent, confidence = self._extract_intent(text)
+
+        # Get model response
+        response = self._get_model_response(text)
+
+        return {
+            "intent": intent,
+            "confidence": confidence,
+            "response": response,
+            "input_length": len(text),
+            "model": self.model_name,
+            "metadata": {
+                "threshold": self.confidence_threshold,
+                "matched": confidence >= self.confidence_threshold,
+            }
+        }
+
+    def batch_classify(self, texts: list[str]) -> list[dict]:
+        """Classify multiple texts for intent.
+
         Args:
-            inputs (List[str]): List of user messages
-            
+            texts: List of input texts to classify
+
         Returns:
-            List[Dict]: List of classification results
+            List of result dicts (with "error" key if failed)
         """
-        logger.info(f"Batch classification initiated | Batch size: {len(inputs)}")
+        from inference.utils import InvalidInputError
         
         results = []
-        for idx, user_input in enumerate(inputs, 1):
+        for text in texts:
             try:
-                result = self.classify(user_input)
+                result = self.classify(text)
                 results.append(result)
-                logger.info(f"Batch item {idx}/{len(inputs)} completed")
-            except Exception as e:
-                logger.error(f"Batch item {idx} failed: {str(e)}")
+            except InvalidInputError as e:
+                logger.warning(f"Failed to classify text: {e}")
+                # Add error result instead of skipping
                 results.append({
                     "error": str(e),
-                    "input": user_input,
-                    "status": "failed"
+                    "input": text,
+                    "intent": None,
+                    "confidence": 0.0
                 })
-        
-        logger.info(f"Batch classification complete | Success: {len([r for r in results if 'error' not in r])}/{len(inputs)}")
+
         return results
-
-
-# Gradio UI (Optional - can be run separately)
-def launch_gradio_ui():
-    """
-    Launch Gradio interface for the intent classifier.
-    Run this separately: python -c "from inference.intent_classifier import launch_gradio_ui; launch_gradio_ui()"
-    """
-    try:
-        import gradio as gr
-        
-        logger.info("Launching Gradio UI")
-        
-        # Initialize classifier
-        classifier = IntentClassifier()
-        
-        def chat_interface(user_message: str) -> str:
-            """Gradio interface function."""
-            try:
-                result = classifier.classify(user_message)
-                return f"**Intent:** {result['intent']}\n\n**Response:** {result['response']}"
-            except Exception as e:
-                return f"Error: {str(e)}"
-        
-        # Create interface
-        interface = gr.Interface(
-            fn=chat_interface,
-            inputs=gr.Textbox(
-                label="Chat Message",
-                placeholder="Enter your message here...",
-                lines=3
-            ),
-            outputs=gr.Textbox(
-                label="Bot Response",
-                lines=5
-            ),
-            title="Edge-Optimized LLM Intent Classifier",
-            description="Real-time intent classification and response generation on edge hardware",
-            examples=[
-                ["Hello, how are you?"],
-                ["What is machine learning?"],
-                ["Help me with this issue"],
-                ["Goodbye!"]
-            ]
-        )
-        
-        logger.info("Gradio interface created, launching...")
-        interface.launch()
-    
-    except ImportError:
-        logger.error("Gradio not installed. Install with: pip install gradio")
-    except Exception as e:
-        logger.error(f"Failed to launch Gradio UI: {str(e)}", exc_info=True)
-
-
-if __name__ == "__main__":
-    # For standalone execution
-    launch_gradio_ui()
