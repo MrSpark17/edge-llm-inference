@@ -21,17 +21,18 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configuration
-DEFAULT_MODEL = "deepscaler-chat"
-MAX_INPUT_LENGTH = 512
-INFERENCE_TIMEOUT_SECONDS = 5
+from .config import get_settings
+
+# Load configuration
+config = get_settings()
+
 
 
 # Pydantic Models for Request/Response validation
 class ChatRequest(BaseModel):
     """Validated chat request."""
-    message: str = Field(..., min_length=1, max_length=MAX_INPUT_LENGTH)
-    model: Optional[str] = Field(default=DEFAULT_MODEL, description="Model name")
+    message: str = Field(..., min_length=1, max_length=config.max_input_length)
+    model: Optional[str] = Field(default=config.model_name, description="Model name")
     
     @validator('message')
     def message_not_empty(cls, v: str) -> str:
@@ -102,7 +103,7 @@ def health_check() -> HealthResponse:
         # Verify model availability with a lightweight test
         try:
             ollama.chat(
-                model=DEFAULT_MODEL,
+                model=config.model_name,
                 messages=[{"role": "user", "content": "ping"}],
                 stream=False
             )
@@ -213,9 +214,9 @@ async def startup_event():
     """Log startup and verify model availability."""
     logger.info("=" * 50)
     logger.info("Edge-Optimized LLM Inference Server Starting")
-    logger.info(f"Default Model: {DEFAULT_MODEL}")
-    logger.info(f"Max Input Length: {MAX_INPUT_LENGTH}")
-    logger.info(f"Inference Timeout: {INFERENCE_TIMEOUT_SECONDS}s")
+    logger.info(f"Default Model: {config.model_name}")
+    logger.info(f"Max Input Length: {config.max_input_length}")
+    logger.info(f"Inference Timeout: {config.inference_timeout_seconds}s")
     logger.info("=" * 50)
 
 
